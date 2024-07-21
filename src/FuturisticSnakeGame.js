@@ -22,6 +22,7 @@ const FuturisticSnakeGame = () => {
   const gameLoopRef = useRef(null);
   const timerRef = useRef(null);
   const gameBoardRef = useRef(null);
+  const lastUpdateTimeRef = useRef(0);
 
   // Audio context and sounds
   const audioContextRef = useRef(null);
@@ -57,15 +58,21 @@ const FuturisticSnakeGame = () => {
     gameOverSoundRef.current.start();
 
     // Set board size
-    const minDimension = Math.min(window.innerWidth, window.innerHeight) * 0.9;
-    const newCellSize = Math.floor(minDimension / GRID_SIZE);
-    setCellSize(newCellSize);
-    setBoardSize(newCellSize * GRID_SIZE);
+    const handleResize = () => {
+      const minDimension = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.7);
+      const newCellSize = Math.floor(minDimension / GRID_SIZE);
+      setCellSize(newCellSize);
+      setBoardSize(newCellSize * GRID_SIZE);
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
 
     return () => {
       if (audioContextRef.current) {
         audioContextRef.current.close();
       }
+      window.removeEventListener('resize', handleResize);
     };
   }, []);
 
@@ -177,12 +184,19 @@ const FuturisticSnakeGame = () => {
 
   useEffect(() => {
     if (gameStarted && !gameOver) {
-      gameLoopRef.current = setInterval(moveSnake, speed);
+      const gameLoop = (timestamp) => {
+        if (timestamp - lastUpdateTimeRef.current >= speed) {
+          moveSnake();
+          lastUpdateTimeRef.current = timestamp;
+        }
+        gameLoopRef.current = requestAnimationFrame(gameLoop);
+      };
+      gameLoopRef.current = requestAnimationFrame(gameLoop);
       timerRef.current = setInterval(() => setTimer(prev => prev + 1), 1000);
     }
 
     return () => {
-      if (gameLoopRef.current) clearInterval(gameLoopRef.current);
+      if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [moveSnake, gameStarted, gameOver, speed]);
@@ -263,69 +277,80 @@ const FuturisticSnakeGame = () => {
   );
 
   // Touch controls
-  const handleTouchStart = (e) => {
-    setTouchStart({
-      x: e.touches[0].clientX,
-      y: e.touches[0].clientY
-    });
-  };
+  useEffect(() => {
+    const handleTouchStart = (e) => {
+      const touch = e.touches[0];
+      setTouchStart({
+        x: touch.clientX,
+        y: touch.clientY
+      });
+    };
 
-  const handleTouchMove = (e) => {
-    if (!touchStart) return;
+    const handleTouchMove = (e) => {
+      if (!touchStart) return;
 
-    setTouchEnd({
-      x: e.touches[0].clientX,
-      y: e.touches[0].clientY
-    });
+      const touch = e.touches[0];
+      setTouchEnd({
+        x: touch.clientX,
+        y: touch.clientY
+      });
+    };
 
-    // Prevent default to stop screen movement
-    e.preventDefault();
-  };
+    const handleTouchEnd = () => {
+      if (!touchStart || !touchEnd) return;
 
-  const handleTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
+      const diffX = touchStart.x - touchEnd.x;
+      const diffY = touchStart.y - touchEnd.y;
 
-    const diffX = touchStart.x - touchEnd.x;
-    const diffY = touchStart.y - touchEnd.y;
-
-    if (Math.abs(diffX) > Math.abs(diffY)) {
-      // Horizontal swipe
-      if (diffX > 0) {
-        setDirection(prev => prev.x === 1 ? prev : { x: -1, y: 0 });
+      if (Math.abs(diffX) > Math.abs(diffY)) {
+        // Horizontal swipe
+        if (diffX > 0) {
+          setDirection(prev => prev.x === 1 ? prev : { x: -1, y: 0 });
+        } else {
+          setDirection(prev => prev.x === -1 ? prev : { x: 1, y: 0 });
+        }
       } else {
-        setDirection(prev => prev.x === -1 ? prev : { x: 1, y: 0 });
+        // Vertical swipe
+        if (diffY > 0) {
+          setDirection(prev => prev.y === 1 ? prev : { x: 0, y: -1 });
+        } else {
+          setDirection(prev => prev.y === -1 ? prev : { x: 0, y: 1 });
+        }
       }
-    } else {
-      // Vertical swipe
-      if (diffY > 0) {
-        setDirection(prev => prev.y === 1 ? prev : { x: 0, y: -1 });
-      } else {
-        setDirection(prev => prev.y === -1 ? prev : { x: 0, y: 1 });
-      }
-    }
 
-    setTouchStart(null);
-    setTouchEnd(null);
+      setTouchStart(null);
+      setTouchEnd(null);
 
-    if (!gameStarted) {
-      setGameStarted(true);
-      if (audioContextRef.current.state === 'suspended') {
-        audioContextRef.current.resume();
+      if (!gameStarted) {
+        setGameStarted(true);
+        if (audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume();
+        }
       }
-    }
-  };
+    };
+
+    document.addEventListener('touchstart', handleTouchStart);
+    document.addEventListener('touchmove', handleTouchMove);
+    document.addEventListener('touchend', handleTouchEnd);
+
+    return () => {
+      document.removeEventListener('touchstart', handleTouchStart);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [touchStart, touchEnd, gameStarted]);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 overflow-hidden p-4">
-      <div className="relative mb-4 sm:mb-8">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 p-4 overflow-auto">
+      <div className="relative mb-4">
         <div className="text-3xl sm:text-6xl font-bold text-blue-500 animate-pulse">
           Futuristic Snake
         </div>
         <div className="absolute top-0 left-0 w-full h-full bg-blue-500 opacity-20 blur-xl"></div>
       </div>
-      <div className="flex justify-between items-center w-full max-w-4xl mb-4 sm:mb-8 px-2 sm:px-4">
+      <div className="flex justify-between items-center w-full max-w-4xl mb-4 px-2 sm:px-4">
         <NeumorphicBox color="#ffd700">
-          <div className="text-sm sm:text-2xl font-bold text-yellow-500">Time: {formatTime(timer)}</div>
+        <div className="text-sm sm:text-2xl font-bold text-yellow-500">Time: {formatTime(timer)}</div>
         </NeumorphicBox>
         <NeumorphicBox color="#ff69b4" glow>
           <div className="text-2xl sm:text-4xl font-bold text-pink-500">Score: {score}</div>
@@ -346,9 +371,6 @@ const FuturisticSnakeGame = () => {
                       0 0 30px hsl(${boxColor}, 100%, 50%), 
                       0 0 40px hsl(${boxColor}, 100%, 50%)`,
         }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
       >
         <div className="absolute inset-0 grid" style={{
           gridTemplateColumns: `repeat(${GRID_SIZE}, 1fr)`,
@@ -387,15 +409,15 @@ const FuturisticSnakeGame = () => {
         />
       </div>
       {!gameStarted && !gameOver && (
-        <div className="mt-4 sm:mt-8 text-xl sm:text-3xl font-bold text-blue-500 animate-bounce">
-          {window.innerWidth > 768 ? 'Press any arrow key to start' : 'Swipe to start'}
+        <div className="mt-4 text-xl sm:text-3xl font-bold text-blue-500 animate-bounce">
+          {window.innerWidth > 768 ? 'Press any arrow key to start' : 'Swipe anywhere to start'}
         </div>
       )}
       {gameOver && (
-        <div className="mt-4 sm:mt-8 text-xl sm:text-3xl font-bold text-red-500 animate-ping">Game Over!</div>
+        <div className="mt-4 text-xl sm:text-3xl font-bold text-red-500 animate-ping">Game Over!</div>
       )}
       <button
-        className="px-4 py-2 sm:px-6 sm:py-3 mt-4 sm:mt-8 text-lg sm:text-xl font-bold text-white rounded-lg hover:bg-blue-600 transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-blue-300"
+        className="px-4 py-2 sm:px-6 sm:py-3 mt-4 text-lg sm:text-xl font-bold text-white rounded-lg hover:bg-blue-600 transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-blue-300"
         style={{
           backgroundColor: `hsl(${boxColor}, 100%, 50%)`,
           boxShadow: `0 0 10px hsl(${boxColor}, 100%, 50%), 
