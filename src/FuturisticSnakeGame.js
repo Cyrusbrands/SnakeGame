@@ -7,6 +7,8 @@ const INITIAL_FOOD = { x: 15, y: 15 };
 const INITIAL_LIVES = 3;
 const POINTS_PER_LEVEL = 10;
 const POWERUP_DURATION = 10000; // 10 seconds
+const POWERUP_SPAWN_CHANCE = 0.1; // 10% chance to spawn a power-up
+const POWERUP_EXIST_DURATION = 15000; // 15 seconds for power-up to exist on board
 
 const FuturisticSnakeGame = () => {
   const [snake, setSnake] = useState(INITIAL_SNAKE);
@@ -24,13 +26,14 @@ const FuturisticSnakeGame = () => {
   const [level, setLevel] = useState(1);
   const [levelProgress, setLevelProgress] = useState(0);
   const [powerUp, setPowerUp] = useState(null);
-  const [isPoweredUp, setIsPoweredUp] = useState(false);
+  const [activePowerUp, setActivePowerUp] = useState(null);
   const [powerUpTimeLeft, setPowerUpTimeLeft] = useState(0);
   const gameLoopRef = useRef(null);
   const timerRef = useRef(null);
   const gameBoardRef = useRef(null);
   const lastUpdateTimeRef = useRef(0);
   const powerUpTimerRef = useRef(null);
+  const powerUpExistTimerRef = useRef(null);
 
   // Audio context and sounds
   const audioContextRef = useRef(null);
@@ -114,10 +117,10 @@ const FuturisticSnakeGame = () => {
     soundGain.connect(audioContextRef.current.destination);
   };
 
-  const playEatSound = () => playSound(eatSoundRef);
-  const playGameOverSound = () => playSound(gameOverSoundRef);
-  const playLevelUpSound = () => playSound(levelUpSoundRef);
-  const playPowerUpSound = () => playSound(powerUpSoundRef);
+  const playEatSound = useCallback(() => playSound(eatSoundRef), []);
+  const playGameOverSound = useCallback(() => playSound(gameOverSoundRef), []);
+  const playLevelUpSound = useCallback(() => playSound(levelUpSoundRef), []);
+  const playPowerUpSound = useCallback(() => playSound(powerUpSoundRef), []);
 
   const moveSnake = useCallback(() => {
     if (gameOver) return;
@@ -128,7 +131,7 @@ const FuturisticSnakeGame = () => {
       head.x += direction.x;
       head.y += direction.y;
 
-      if (isPoweredUp) {
+      if (activePowerUp === 'wallPass') {
         if (head.x < 0) head.x = GRID_SIZE - 1;
         if (head.x >= GRID_SIZE) head.x = 0;
         if (head.y < 0) head.y = GRID_SIZE - 1;
@@ -168,31 +171,32 @@ const FuturisticSnakeGame = () => {
           }
           return newScore;
         });
-        if (food.isPowerUp) {
-          setIsPoweredUp(true);
-          setPowerUpTimeLeft(POWERUP_DURATION);
-          playPowerUpSound();
-          if (powerUpTimerRef.current) clearInterval(powerUpTimerRef.current);
-          powerUpTimerRef.current = setInterval(() => {
-            setPowerUpTimeLeft(prev => {
-              if (prev <= 1000) {
-                clearInterval(powerUpTimerRef.current);
-                setIsPoweredUp(false);
-                return 0;
-              }
-              return prev - 1000;
-            });
-          }, 1000);
-        }
         setFood(generateFood(newSnake));
         playEatSound();
+      } else if (powerUp && head.x === powerUp.x && head.y === powerUp.y) {
+        setActivePowerUp('wallPass');
+        setPowerUpTimeLeft(POWERUP_DURATION);
+        playPowerUpSound();
+        if (powerUpTimerRef.current) clearInterval(powerUpTimerRef.current);
+        powerUpTimerRef.current = setInterval(() => {
+          setPowerUpTimeLeft(prev => {
+            if (prev <= 1000) {
+              clearInterval(powerUpTimerRef.current);
+              setActivePowerUp(null);
+              return 0;
+            }
+            return prev - 1000;
+          });
+        }, 1000);
+        setPowerUp(null);
+        if (powerUpExistTimerRef.current) clearTimeout(powerUpExistTimerRef.current);
       } else {
         newSnake.pop();
       }
 
       return newSnake;
     });
-  }, [direction, food, gameOver, lives, isPoweredUp]);
+  }, [direction, food, gameOver, lives, activePowerUp, powerUp, playEatSound, playGameOverSound, playLevelUpSound, playPowerUpSound]);
 
   useEffect(() => {
     const handleKeyPress = (e) => {
@@ -256,20 +260,38 @@ const FuturisticSnakeGame = () => {
     return () => clearInterval(colorInterval);
   }, []);
 
-  const generateFood = (snake) => {
-    const isColliding = (food) => snake.some(segment => segment.x === food.x && segment.y === food.y);
+  const generateFood = useCallback((snake) => {
+    const isColliding = (item) => snake.some(segment => segment.x === item.x && segment.y === item.y) || 
+                                  (powerUp && powerUp.x === item.x && powerUp.y === item.y);
     
     let newFood;
     do {
       newFood = {
         x: Math.floor(Math.random() * GRID_SIZE),
         y: Math.floor(Math.random() * GRID_SIZE),
-        isPowerUp: Math.random() < 0.1, // 10% chance of being a power-up
       };
     } while (isColliding(newFood));
     
+    // Chance to spawn a power-up if one doesn't exist
+    if (!powerUp && Math.random() < POWERUP_SPAWN_CHANCE) {
+      let newPowerUp;
+      do {
+        newPowerUp = {
+          x: Math.floor(Math.random() * GRID_SIZE),
+          y: Math.floor(Math.random() * GRID_SIZE),
+        };
+      } while (isColliding(newPowerUp) || (newPowerUp.x === newFood.x && newPowerUp.y === newFood.y));
+      setPowerUp(newPowerUp);
+
+      // Set timer for power-up to disappear
+      if (powerUpExistTimerRef.current) clearTimeout(powerUpExistTimerRef.current);
+      powerUpExistTimerRef.current = setTimeout(() => {
+        setPowerUp(null);
+      }, POWERUP_EXIST_DURATION);
+    }
+
     return newFood;
-  };
+  }, [powerUp]);
 
   const resetGame = () => {
     setSnake([{ x: Math.floor(GRID_SIZE / 2), y: Math.floor(GRID_SIZE / 2) }]);
@@ -283,9 +305,11 @@ const FuturisticSnakeGame = () => {
     setLives(INITIAL_LIVES);
     setLevel(1);
     setLevelProgress(0);
-    setIsPoweredUp(false);
+    setActivePowerUp(null);
     setPowerUpTimeLeft(0);
+    setPowerUp(null);
     if (powerUpTimerRef.current) clearInterval(powerUpTimerRef.current);
+    if (powerUpExistTimerRef.current) clearTimeout(powerUpExistTimerRef.current);
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
@@ -435,8 +459,12 @@ const FuturisticSnakeGame = () => {
         </NeumorphicBox>
       </div>
       <ProgressBar progress={(levelProgress / POINTS_PER_LEVEL) * 100} color="#ff0000" label="Level Progress" />
-      {isPoweredUp && (
-        <ProgressBar progress={(powerUpTimeLeft / POWERUP_DURATION) * 100} color="#00ffff" label="Power-up" />
+      {activePowerUp && (
+        <ProgressBar 
+          progress={(powerUpTimeLeft / POWERUP_DURATION) * 100} 
+          color="#00ffff" 
+          label={`Power-up: ${activePowerUp === 'wallPass' ? 'Wall Pass' : 'Unknown'}`} 
+        />
       )}
       <div 
         ref={gameBoardRef}
@@ -483,12 +511,24 @@ const FuturisticSnakeGame = () => {
             top: food.y * cellSize,
             width: cellSize,
             height: cellSize,
-            backgroundColor: food.isPowerUp ? '#00ffff' : '#ff0000',
-            boxShadow: food.isPowerUp 
-              ? '0 0 5px #00ffff, 0 0 10px #00ffff, 0 0 15px #00ffff' 
-              : '0 0 5px #ff0000, 0 0 10px #ff0000',
+            backgroundColor: '#ff0000',
+            boxShadow: '0 0 5px #ff0000, 0 0 10px #ff0000',
           }}
         />
+
+        {powerUp && (
+          <div
+            className="absolute rounded-full animate-pulse"
+            style={{
+              left: powerUp.x * cellSize,
+              top: powerUp.y * cellSize,
+              width: cellSize,
+              height: cellSize,
+              backgroundColor: '#00ffff',
+              boxShadow: '0 0 5px #00ffff, 0 0 10px #00ffff, 0 0 15px #00ffff',
+            }}
+          />
+        )}
       </div>
       {!gameStarted && !gameOver && (
         <div className="mt-4 text-xl sm:text-3xl font-bold text-blue-500 animate-bounce">
