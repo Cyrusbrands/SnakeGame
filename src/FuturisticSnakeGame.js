@@ -196,13 +196,16 @@ const FuturisticSnakeGame = () => {
   }, []);
 
   const generateFood = (snake) => {
+    const isColliding = (food) => snake.some(segment => segment.x === food.x && segment.y === food.y);
+    
     let newFood;
     do {
       newFood = {
         x: Math.floor(Math.random() * GRID_SIZE),
         y: Math.floor(Math.random() * GRID_SIZE),
       };
-    } while (snake.some(segment => segment.x === newFood.x && segment.y === newFood.y));
+    } while (isColliding(newFood));
+    
     return newFood;
   };
 
