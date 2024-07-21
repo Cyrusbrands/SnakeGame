@@ -5,6 +5,8 @@ const INITIAL_SNAKE = [{ x: 10, y: 10 }];
 const INITIAL_DIRECTION = { x: 1, y: 0 };
 const INITIAL_FOOD = { x: 15, y: 15 };
 const INITIAL_LIVES = 3;
+const POINTS_PER_LEVEL = 10;
+const POWERUP_DURATION = 10000; // 10 seconds
 
 const FuturisticSnakeGame = () => {
   const [snake, setSnake] = useState(INITIAL_SNAKE);
@@ -19,15 +21,23 @@ const FuturisticSnakeGame = () => {
   const [lives, setLives] = useState(INITIAL_LIVES);
   const [cellSize, setCellSize] = useState(0);
   const [boardSize, setBoardSize] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [levelProgress, setLevelProgress] = useState(0);
+  const [powerUp, setPowerUp] = useState(null);
+  const [isPoweredUp, setIsPoweredUp] = useState(false);
+  const [powerUpTimeLeft, setPowerUpTimeLeft] = useState(0);
   const gameLoopRef = useRef(null);
   const timerRef = useRef(null);
   const gameBoardRef = useRef(null);
   const lastUpdateTimeRef = useRef(0);
+  const powerUpTimerRef = useRef(null);
 
   // Audio context and sounds
   const audioContextRef = useRef(null);
   const eatSoundRef = useRef(null);
   const gameOverSoundRef = useRef(null);
+  const levelUpSoundRef = useRef(null);
+  const powerUpSoundRef = useRef(null);
 
   // Touch controls
   const [touchStart, setTouchStart] = useState(null);
@@ -57,6 +67,26 @@ const FuturisticSnakeGame = () => {
     gameOverGain.connect(audioContextRef.current.destination);
     gameOverSoundRef.current.start();
 
+    // Create level up sound
+    levelUpSoundRef.current = audioContextRef.current.createOscillator();
+    levelUpSoundRef.current.type = 'square';
+    levelUpSoundRef.current.frequency.setValueAtTime(660, audioContextRef.current.currentTime);
+    const levelUpGain = audioContextRef.current.createGain();
+    levelUpGain.gain.setValueAtTime(0, audioContextRef.current.currentTime);
+    levelUpSoundRef.current.connect(levelUpGain);
+    levelUpGain.connect(audioContextRef.current.destination);
+    levelUpSoundRef.current.start();
+
+    // Create power-up sound
+    powerUpSoundRef.current = audioContextRef.current.createOscillator();
+    powerUpSoundRef.current.type = 'triangle';
+    powerUpSoundRef.current.frequency.setValueAtTime(880, audioContextRef.current.currentTime);
+    const powerUpGain = audioContextRef.current.createGain();
+    powerUpGain.gain.setValueAtTime(0, audioContextRef.current.currentTime);
+    powerUpSoundRef.current.connect(powerUpGain);
+    powerUpGain.connect(audioContextRef.current.destination);
+    powerUpSoundRef.current.start();
+
     // Set board size
     const handleResize = () => {
       const minDimension = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.7);
@@ -76,25 +106,18 @@ const FuturisticSnakeGame = () => {
     };
   }, []);
 
-  const playEatSound = () => {
+  const playSound = (soundRef) => {
     const now = audioContextRef.current.currentTime;
-    eatSoundRef.current.frequency.setValueAtTime(440, now);
-    eatSoundRef.current.frequency.linearRampToValueAtTime(880, now + 0.1);
-    const eatGain = eatSoundRef.current.connect(audioContextRef.current.createGain());
-    eatGain.gain.setValueAtTime(0.2, now);
-    eatGain.gain.linearRampToValueAtTime(0, now + 0.1);
-    eatGain.connect(audioContextRef.current.destination);
+    const soundGain = soundRef.current.connect(audioContextRef.current.createGain());
+    soundGain.gain.setValueAtTime(0.2, now);
+    soundGain.gain.linearRampToValueAtTime(0, now + 0.1);
+    soundGain.connect(audioContextRef.current.destination);
   };
 
-  const playGameOverSound = () => {
-    const now = audioContextRef.current.currentTime;
-    gameOverSoundRef.current.frequency.setValueAtTime(100, now);
-    gameOverSoundRef.current.frequency.linearRampToValueAtTime(50, now + 0.5);
-    const gameOverGain = gameOverSoundRef.current.connect(audioContextRef.current.createGain());
-    gameOverGain.gain.setValueAtTime(0.2, now);
-    gameOverGain.gain.linearRampToValueAtTime(0, now + 0.5);
-    gameOverGain.connect(audioContextRef.current.destination);
-  };
+  const playEatSound = () => playSound(eatSoundRef);
+  const playGameOverSound = () => playSound(gameOverSoundRef);
+  const playLevelUpSound = () => playSound(levelUpSoundRef);
+  const playPowerUpSound = () => playSound(powerUpSoundRef);
 
   const moveSnake = useCallback(() => {
     if (gameOver) return;
@@ -105,7 +128,12 @@ const FuturisticSnakeGame = () => {
       head.x += direction.x;
       head.y += direction.y;
 
-      if (head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE) {
+      if (isPoweredUp) {
+        if (head.x < 0) head.x = GRID_SIZE - 1;
+        if (head.x >= GRID_SIZE) head.x = 0;
+        if (head.y < 0) head.y = GRID_SIZE - 1;
+        if (head.y >= GRID_SIZE) head.y = 0;
+      } else if (head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE) {
         if (lives > 1) {
           setLives(prev => prev - 1);
           return [{ x: Math.floor(GRID_SIZE / 2), y: Math.floor(GRID_SIZE / 2) }];
@@ -132,11 +160,30 @@ const FuturisticSnakeGame = () => {
       if (head.x === food.x && head.y === food.y) {
         setScore(prevScore => {
           const newScore = prevScore + 1;
-          if (newScore % 5 === 0) {
+          setLevelProgress(newScore % POINTS_PER_LEVEL);
+          if (newScore % POINTS_PER_LEVEL === 0) {
+            setLevel(prevLevel => prevLevel + 1);
             setSpeed(prevSpeed => Math.max(prevSpeed - 10, 50));
+            playLevelUpSound();
           }
           return newScore;
         });
+        if (food.isPowerUp) {
+          setIsPoweredUp(true);
+          setPowerUpTimeLeft(POWERUP_DURATION);
+          playPowerUpSound();
+          if (powerUpTimerRef.current) clearInterval(powerUpTimerRef.current);
+          powerUpTimerRef.current = setInterval(() => {
+            setPowerUpTimeLeft(prev => {
+              if (prev <= 1000) {
+                clearInterval(powerUpTimerRef.current);
+                setIsPoweredUp(false);
+                return 0;
+              }
+              return prev - 1000;
+            });
+          }, 1000);
+        }
         setFood(generateFood(newSnake));
         playEatSound();
       } else {
@@ -145,7 +192,7 @@ const FuturisticSnakeGame = () => {
 
       return newSnake;
     });
-  }, [direction, food, gameOver, lives]);
+  }, [direction, food, gameOver, lives, isPoweredUp]);
 
   useEffect(() => {
     const handleKeyPress = (e) => {
@@ -217,6 +264,7 @@ const FuturisticSnakeGame = () => {
       newFood = {
         x: Math.floor(Math.random() * GRID_SIZE),
         y: Math.floor(Math.random() * GRID_SIZE),
+        isPowerUp: Math.random() < 0.1, // 10% chance of being a power-up
       };
     } while (isColliding(newFood));
     
@@ -233,6 +281,11 @@ const FuturisticSnakeGame = () => {
     setSpeed(150);
     setTimer(0);
     setLives(INITIAL_LIVES);
+    setLevel(1);
+    setLevelProgress(0);
+    setIsPoweredUp(false);
+    setPowerUpTimeLeft(0);
+    if (powerUpTimerRef.current) clearInterval(powerUpTimerRef.current);
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
@@ -273,6 +326,25 @@ const FuturisticSnakeGame = () => {
           opacity: 0.4,
         }}></div>
       )}
+    </div>
+  );
+
+  const ProgressBar = ({ progress, color, label }) => (
+    <div className="w-full mt-2">
+      <div className="flex justify-between mb-1">
+        <span className="text-base font-medium text-blue-500">{label}</span>
+        <span className="text-sm font-medium text-blue-500">{`${Math.round(progress)}%`}</span>
+      </div>
+      <div className="w-full bg-gray-700 rounded-full h-2.5">
+        <div
+          className="h-2.5 rounded-full transition-all duration-500 ease-out"
+          style={{
+            width: `${progress}%`,
+            background: `linear-gradient(90deg, ${color} 0%, #ff00ff 100%)`,
+            boxShadow: `0 0 10px ${color}, 0 0 20px ${color}`,
+          }}
+        ></div>
+      </div>
     </div>
   );
 
@@ -348,9 +420,9 @@ const FuturisticSnakeGame = () => {
         </div>
         <div className="absolute top-0 left-0 w-full h-full bg-blue-500 opacity-20 blur-xl"></div>
       </div>
-      <div className="flex justify-between items-center w-full max-w-4xl mb-4 px-2 sm:px-4">
+      <div className="flex flex-wrap justify-between items-center w-full max-w-4xl mb-4 px-2 sm:px-4">
         <NeumorphicBox color="#ffd700">
-        <div className="text-sm sm:text-2xl font-bold text-yellow-500">Time: {formatTime(timer)}</div>
+          <div className="text-sm sm:text-2xl font-bold text-yellow-500">Time: {formatTime(timer)}</div>
         </NeumorphicBox>
         <NeumorphicBox color="#ff69b4" glow>
           <div className="text-2xl sm:text-4xl font-bold text-pink-500">Score: {score}</div>
@@ -358,10 +430,17 @@ const FuturisticSnakeGame = () => {
         <NeumorphicBox color="#00ff00">
           <div className="text-sm sm:text-2xl font-bold text-green-500">Lives: {lives}</div>
         </NeumorphicBox>
+        <NeumorphicBox color="#1e90ff">
+          <div className="text-sm sm:text-2xl font-bold text-blue-500">Level: {level}</div>
+        </NeumorphicBox>
       </div>
+      <ProgressBar progress={(levelProgress / POINTS_PER_LEVEL) * 100} color="#ff0000" label="Level Progress" />
+      {isPoweredUp && (
+        <ProgressBar progress={(powerUpTimeLeft / POWERUP_DURATION) * 100} color="#00ffff" label="Power-up" />
+      )}
       <div 
         ref={gameBoardRef}
-        className="relative border-4 rounded-lg shadow-lg overflow-hidden transition-colors duration-300"
+        className="relative border-4 rounded-lg shadow-lg overflow-hidden transition-colors duration-300 mt-4"
         style={{
           width: boardSize,
           height: boardSize,
@@ -398,13 +477,16 @@ const FuturisticSnakeGame = () => {
         ))}
         
         <div
-          className="absolute bg-red-500 rounded-full animate-pulse"
+          className="absolute rounded-full animate-pulse"
           style={{
             left: food.x * cellSize,
             top: food.y * cellSize,
             width: cellSize,
             height: cellSize,
-            boxShadow: '0 0 5px #ff0000, 0 0 10px #ff0000',
+            backgroundColor: food.isPowerUp ? '#00ffff' : '#ff0000',
+            boxShadow: food.isPowerUp 
+              ? '0 0 5px #00ffff, 0 0 10px #00ffff, 0 0 15px #00ffff' 
+              : '0 0 5px #ff0000, 0 0 10px #ff0000',
           }}
         />
       </div>
