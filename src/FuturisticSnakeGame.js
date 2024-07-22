@@ -8,7 +8,7 @@ const INITIAL_LIVES = 3;
 const POINTS_PER_LEVEL = 10;
 const POWERUP_DURATION = 10000; // 10 seconds
 const POWERUP_SPAWN_CHANCE = 0.1; // 10% chance to spawn a power-up
-const POWERUP_EXIST_DURATION = 15000; // 15 seconds for power-up to exist on board
+const POWERUP_EXIST_DURATION = 8000; // 15 seconds for power-up to exist on board
 
 const FuturisticSnakeGame = () => {
   const [snake, setSnake] = useState(INITIAL_SNAKE);
@@ -50,47 +50,23 @@ const FuturisticSnakeGame = () => {
   useEffect(() => {
     audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
 
-    // Create eat sound
-    eatSoundRef.current = audioContextRef.current.createOscillator();
-    eatSoundRef.current.type = 'sine';
-    eatSoundRef.current.frequency.setValueAtTime(440, audioContextRef.current.currentTime);
-    const eatGain = audioContextRef.current.createGain();
-    eatGain.gain.setValueAtTime(0, audioContextRef.current.currentTime);
-    eatSoundRef.current.connect(eatGain);
-    eatGain.connect(audioContextRef.current.destination);
-    eatSoundRef.current.start();
+    const createOscillator = (type, frequency) => {
+      const oscillator = audioContextRef.current.createOscillator();
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(frequency, audioContextRef.current.currentTime);
+      const gain = audioContextRef.current.createGain();
+      gain.gain.setValueAtTime(0, audioContextRef.current.currentTime);
+      oscillator.connect(gain);
+      gain.connect(audioContextRef.current.destination);
+      oscillator.start();
+      return oscillator;
+    };
 
-    // Create game over sound
-    gameOverSoundRef.current = audioContextRef.current.createOscillator();
-    gameOverSoundRef.current.type = 'sawtooth';
-    gameOverSoundRef.current.frequency.setValueAtTime(100, audioContextRef.current.currentTime);
-    const gameOverGain = audioContextRef.current.createGain();
-    gameOverGain.gain.setValueAtTime(0, audioContextRef.current.currentTime);
-    gameOverSoundRef.current.connect(gameOverGain);
-    gameOverGain.connect(audioContextRef.current.destination);
-    gameOverSoundRef.current.start();
+    eatSoundRef.current = createOscillator('sine', 440);
+    gameOverSoundRef.current = createOscillator('sawtooth', 100);
+    levelUpSoundRef.current = createOscillator('square', 660);
+    powerUpSoundRef.current = createOscillator('triangle', 880);
 
-    // Create level up sound
-    levelUpSoundRef.current = audioContextRef.current.createOscillator();
-    levelUpSoundRef.current.type = 'square';
-    levelUpSoundRef.current.frequency.setValueAtTime(660, audioContextRef.current.currentTime);
-    const levelUpGain = audioContextRef.current.createGain();
-    levelUpGain.gain.setValueAtTime(0, audioContextRef.current.currentTime);
-    levelUpSoundRef.current.connect(levelUpGain);
-    levelUpGain.connect(audioContextRef.current.destination);
-    levelUpSoundRef.current.start();
-
-    // Create power-up sound
-    powerUpSoundRef.current = audioContextRef.current.createOscillator();
-    powerUpSoundRef.current.type = 'triangle';
-    powerUpSoundRef.current.frequency.setValueAtTime(880, audioContextRef.current.currentTime);
-    const powerUpGain = audioContextRef.current.createGain();
-    powerUpGain.gain.setValueAtTime(0, audioContextRef.current.currentTime);
-    powerUpSoundRef.current.connect(powerUpGain);
-    powerUpGain.connect(audioContextRef.current.destination);
-    powerUpSoundRef.current.start();
-
-    // Set board size
     const handleResize = () => {
       const minDimension = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.7);
       const newCellSize = Math.floor(minDimension / GRID_SIZE);
@@ -109,18 +85,51 @@ const FuturisticSnakeGame = () => {
     };
   }, []);
 
-  const playSound = (soundRef) => {
+  const playSound = useCallback((soundRef) => {
     const now = audioContextRef.current.currentTime;
     const soundGain = soundRef.current.connect(audioContextRef.current.createGain());
     soundGain.gain.setValueAtTime(0.2, now);
     soundGain.gain.linearRampToValueAtTime(0, now + 0.1);
     soundGain.connect(audioContextRef.current.destination);
-  };
+  }, []);
 
-  const playEatSound = useCallback(() => playSound(eatSoundRef), []);
-  const playGameOverSound = useCallback(() => playSound(gameOverSoundRef), []);
-  const playLevelUpSound = useCallback(() => playSound(levelUpSoundRef), []);
-  const playPowerUpSound = useCallback(() => playSound(powerUpSoundRef), []);
+  const playEatSound = useCallback(() => playSound(eatSoundRef), [playSound]);
+  const playGameOverSound = useCallback(() => playSound(gameOverSoundRef), [playSound]);
+  const playLevelUpSound = useCallback(() => playSound(levelUpSoundRef), [playSound]);
+  const playPowerUpSound = useCallback(() => playSound(powerUpSoundRef), [playSound]);
+
+  const generateFood = useCallback((snake) => {
+    const isColliding = (item) => snake.some(segment => segment.x === item.x && segment.y === item.y) || 
+                                  (powerUp && powerUp.x === item.x && powerUp.y === item.y);
+    
+    let newFood;
+    do {
+      newFood = {
+        x: Math.floor(Math.random() * GRID_SIZE),
+        y: Math.floor(Math.random() * GRID_SIZE),
+      };
+    } while (isColliding(newFood));
+    
+    // Chance to spawn a power-up if one doesn't exist
+    if (!powerUp && Math.random() < POWERUP_SPAWN_CHANCE) {
+      let newPowerUp;
+      do {
+        newPowerUp = {
+          x: Math.floor(Math.random() * GRID_SIZE),
+          y: Math.floor(Math.random() * GRID_SIZE),
+        };
+      } while (isColliding(newPowerUp) || (newPowerUp.x === newFood.x && newPowerUp.y === newFood.y));
+      setPowerUp(newPowerUp);
+
+      // Set timer for power-up to disappear
+      if (powerUpExistTimerRef.current) clearTimeout(powerUpExistTimerRef.current);
+      powerUpExistTimerRef.current = setTimeout(() => {
+        setPowerUp(null);
+      }, POWERUP_EXIST_DURATION);
+    }
+
+    return newFood;
+  }, [powerUp]);
 
   const moveSnake = useCallback(() => {
     if (gameOver) return;
@@ -196,7 +205,7 @@ const FuturisticSnakeGame = () => {
 
       return newSnake;
     });
-  }, [direction, food, gameOver, lives, activePowerUp, powerUp, playEatSound, playGameOverSound, playLevelUpSound, playPowerUpSound]);
+  }, [direction, food, gameOver, lives, activePowerUp, powerUp, playEatSound, playGameOverSound, playLevelUpSound, playPowerUpSound, generateFood]);
 
   useEffect(() => {
     const handleKeyPress = (e) => {
@@ -260,40 +269,7 @@ const FuturisticSnakeGame = () => {
     return () => clearInterval(colorInterval);
   }, []);
 
-  const generateFood = useCallback((snake) => {
-    const isColliding = (item) => snake.some(segment => segment.x === item.x && segment.y === item.y) || 
-                                  (powerUp && powerUp.x === item.x && powerUp.y === item.y);
-    
-    let newFood;
-    do {
-      newFood = {
-        x: Math.floor(Math.random() * GRID_SIZE),
-        y: Math.floor(Math.random() * GRID_SIZE),
-      };
-    } while (isColliding(newFood));
-    
-    // Chance to spawn a power-up if one doesn't exist
-    if (!powerUp && Math.random() < POWERUP_SPAWN_CHANCE) {
-      let newPowerUp;
-      do {
-        newPowerUp = {
-          x: Math.floor(Math.random() * GRID_SIZE),
-          y: Math.floor(Math.random() * GRID_SIZE),
-        };
-      } while (isColliding(newPowerUp) || (newPowerUp.x === newFood.x && newPowerUp.y === newFood.y));
-      setPowerUp(newPowerUp);
-
-      // Set timer for power-up to disappear
-      if (powerUpExistTimerRef.current) clearTimeout(powerUpExistTimerRef.current);
-      powerUpExistTimerRef.current = setTimeout(() => {
-        setPowerUp(null);
-      }, POWERUP_EXIST_DURATION);
-    }
-
-    return newFood;
-  }, [powerUp]);
-
-  const resetGame = () => {
+  const resetGame = useCallback(() => {
     setSnake([{ x: Math.floor(GRID_SIZE / 2), y: Math.floor(GRID_SIZE / 2) }]);
     setDirection({ x: 1, y: 0 });
     setFood(generateFood([{ x: Math.floor(GRID_SIZE / 2), y: Math.floor(GRID_SIZE / 2) }]));
@@ -313,20 +289,20 @@ const FuturisticSnakeGame = () => {
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
-  };
+  }, [generateFood]);
 
-  const getSegmentColor = (index) => {
+  const getSegmentColor = useCallback((index) => {
     const hue = (index * 10 + boxColor) % 360;
     return `hsl(${hue}, 100%, 50%)`;
-  };
+  }, [boxColor]);
 
-  const formatTime = (seconds) => {
+  const formatTime = useCallback((seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  }, []);
 
-  const NeumorphicBox = ({ children, color, glow }) => (
+  const NeumorphicBox = useCallback(({ children, color, glow }) => (
     <div className="relative p-2 sm:p-4 rounded-lg" style={{
       backgroundColor: '#2a2a2a',
       boxShadow: `
@@ -351,9 +327,9 @@ const FuturisticSnakeGame = () => {
         }}></div>
       )}
     </div>
-  );
+  ), []);
 
-  const ProgressBar = ({ progress, color, label }) => (
+  const ProgressBar = useCallback(({ progress, color, label }) => (
     <div className="w-full mt-2">
       <div className="flex justify-between mb-1">
         <span className="text-base font-medium text-blue-500">{label}</span>
@@ -370,7 +346,7 @@ const FuturisticSnakeGame = () => {
         ></div>
       </div>
     </div>
-  );
+  ), []);
 
   // Touch controls
   useEffect(() => {
